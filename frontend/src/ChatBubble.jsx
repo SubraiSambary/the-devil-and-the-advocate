@@ -1,49 +1,72 @@
 // =====================================================
 // ChatBubble.jsx
-// Renders one message in the group chat
 // =====================================================
 
-// Agent configuration — colors, names, emojis
 const AGENTS = {
   devil: {
-    name:   'The Devil',
-    emoji:  '😈',
-    color:  '#ff4444',
-    bg:     '#2a1010',
-    side:   'left',
+    name:  'The Devil',
+    emoji: '😈',
+    color: '#ff4444',
+    bg:    '#2a1010',
+    side:  'left',
   },
   advocate: {
-    name:   'The Advocate',
-    emoji:  '😇',
-    color:  '#4488ff',
-    bg:     '#101828',
-    side:   'right',
+    name:  'The Advocate',
+    emoji: '😇',
+    color: '#4488ff',
+    bg:    '#101828',
+    side:  'right',
   },
   judge: {
-    name:   'The Judge',
-    emoji:  '⚖️',
-    color:  '#44bb44',
-    bg:     '#101a10',
-    side:   'left',
+    name:  'The Judge',
+    emoji: '⚖️',
+    color: '#44bb44',
+    bg:    '#101a10',
+    side:  'left',
   },
+}
+
+// Renders **bold** markdown inline
+function RenderText({ text, bold = false }) {
+  if (!bold || !text.includes('**')) {
+    return (
+      <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+        {text}
+      </span>
+    )
+  }
+  const parts = text.split(/\*\*(.*?)\*\*/g)
+  return (
+    <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+      {parts.map((part, i) =>
+        i % 2 === 1
+          ? <strong key={i} style={{ color: '#ffffff', fontWeight: 700 }}>{part}</strong>
+          : <span key={i}>{part}</span>
+      )}
+    </span>
+  )
 }
 
 export default function ChatBubble({ event, isNew }) {
   const agent  = AGENTS[event.agent] || AGENTS.judge
   const isLeft = agent.side === 'left'
+  const isVerdict = event.type === 'verdict'
 
-  // Reaction messages — just an emoji, shown inline small
+  // Skip empty messages entirely
+  if (!event.text || event.text.trim().length < 4 || event.text.trim() === '...') return null
+
+  // ── Emoji reaction ──
   if (event.type === 'reaction') {
     return (
       <div style={{
-        display:    'flex',
+        display:        'flex',
         justifyContent: isLeft ? 'flex-start' : 'flex-end',
-        padding:    '2px 16px',
+        padding:        '1px 60px',
       }}>
         <span style={{
-          fontSize:   '20px',
-          opacity:    0.85,
-          animation:  isNew ? 'popIn 0.2s ease' : 'none',
+          fontSize:  '18px',
+          opacity:   0.8,
+          animation: isNew ? 'popIn 0.2s ease' : 'none',
         }}>
           {event.text}
         </span>
@@ -51,78 +74,18 @@ export default function ChatBubble({ event, isNew }) {
     )
   }
 
-  // Judge short mid-debate comment — centered
-  if (event.type === 'judge' && !event.winner) {
-    return (
-      <div style={{
-        display:        'flex',
-        justifyContent: 'center',
-        padding:        '6px 16px',
-      }}>
-        <div style={{
-          background:   '#1a1a1a',
-          border:       '1px solid #333',
-          borderRadius: '20px',
-          padding:      '4px 14px',
-          fontSize:     '13px',
-          color:        '#888',
-          animation:    isNew ? 'fadeIn 0.3s ease' : 'none',
-        }}>
-          ⚖️ {event.text}
-        </div>
-      </div>
-    )
-  }
-
-  // Final verdict — full width special card
-  if (event.type === 'verdict') {
-    return (
-      <div style={{
-        margin:       '16px',
-        background:   '#1a1a0a',
-        border:       '1px solid #554400',
-        borderRadius: '12px',
-        padding:      '16px',
-        animation:    isNew ? 'fadeIn 0.5s ease' : 'none',
-      }}>
-        <div style={{
-          fontSize:     '12px',
-          color:        '#aa8800',
-          fontWeight:   600,
-          marginBottom: '8px',
-          letterSpacing: '0.05em',
-        }}>
-          ⚖️ FINAL VERDICT
-          {event.winner && event.winner !== 'draw' && (
-            <span style={{ marginLeft: '8px', color: '#ffcc00' }}>
-              🏆 {event.winner === 'devil' ? 'The Devil wins' : 'The Advocate wins'}
-            </span>
-          )}
-        </div>
-        <div style={{
-          fontSize:   '14px',
-          color:      '#dddddd',
-          lineHeight: 1.7,
-          whiteSpace: 'pre-wrap',
-        }}>
-          {event.text}
-        </div>
-      </div>
-    )
-  }
-
-  // Regular message bubble (opening or turn)
+  // ── All message types — same bubble layout ──
   return (
     <div style={{
-      display:        'flex',
-      flexDirection:  isLeft ? 'row' : 'row-reverse',
-      alignItems:     'flex-end',
-      gap:            '8px',
-      padding:        '4px 16px',
-      animation:      isNew ? 'slideIn 0.3s ease' : 'none',
+      display:       'flex',
+      flexDirection: isLeft ? 'row' : 'row-reverse',
+      alignItems:    'flex-end',
+      gap:           '8px',
+      padding:       '4px 16px',
+      animation:     isNew ? 'slideIn 0.3s ease' : 'none',
     }}>
 
-      {/* Avatar circle */}
+      {/* Avatar */}
       <div style={{
         width:          '36px',
         height:         '36px',
@@ -138,16 +101,16 @@ export default function ChatBubble({ event, isNew }) {
         {agent.emoji}
       </div>
 
-      {/* Bubble */}
+      {/* Bubble content */}
       <div style={{ maxWidth: '72%' }}>
 
-        {/* Name + timestamp */}
+        {/* Name row */}
         <div style={{
-          display:        'flex',
-          alignItems:     'center',
-          gap:            '6px',
-          marginBottom:   '3px',
-          flexDirection:  isLeft ? 'row' : 'row-reverse',
+          display:       'flex',
+          alignItems:    'center',
+          gap:           '6px',
+          marginBottom:  '3px',
+          flexDirection: isLeft ? 'row' : 'row-reverse',
         }}>
           <span style={{
             fontSize:   '12px',
@@ -155,6 +118,7 @@ export default function ChatBubble({ event, isNew }) {
             color:      agent.color,
           }}>
             {agent.name}
+            {isVerdict && ' — Verdict'}
           </span>
           <span style={{ fontSize: '11px', color: '#555' }}>
             {event.timestamp}
@@ -170,21 +134,31 @@ export default function ChatBubble({ event, isNew }) {
               Round {event.round}
             </span>
           )}
+          {isVerdict && event.winner && event.winner !== 'draw' && (
+            <span style={{
+              fontSize:     '11px',
+              background:   '#2a2a00',
+              color:        '#ffcc00',
+              padding:      '1px 8px',
+              borderRadius: '10px',
+              fontWeight:   600,
+            }}>
+              🏆 {event.winner === 'devil' ? 'Devil wins' : 'Advocate wins'}
+            </span>
+          )}
         </div>
 
-        {/* Message text */}
+        {/* Message bubble */}
         <div style={{
-          background:   agent.bg,
-          border:       `1px solid ${agent.color}22`,
+          background:   isVerdict ? '#141a0a' : agent.bg,
+          border:       `1px solid ${isVerdict ? '#445522' : agent.color + '33'}`,
           borderRadius: isLeft ? '4px 16px 16px 16px' : '16px 4px 16px 16px',
-          padding:      '10px 14px',
+          padding:      isVerdict ? '14px 16px' : '10px 14px',
           fontSize:     '14px',
-          lineHeight:   1.6,
-          color:        '#eeeeee',
-          whiteSpace:   'pre-wrap',
-          wordBreak:    'word-break',
+          lineHeight:   1.75,
+          color:        '#dddddd',
         }}>
-          {event.text}
+          <RenderText text={event.text} bold={isVerdict} />
         </div>
 
       </div>

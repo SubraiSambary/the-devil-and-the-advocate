@@ -113,6 +113,26 @@ export default function App() {
         {/* Typing indicator */}
         {typing && <TypingIndicator agent={typing} />}
 
+        {/* Thinking indicator — shows when LLM is working */}
+        {status === 'debating' && !typing && messages.length > 0 && (
+          <div style={{
+            display:        'flex',
+            justifyContent: 'center',
+            padding:        '8px',
+          }}>
+            <div style={{
+              fontSize:     '12px',
+              color:        '#444',
+              background:   '#111',
+              padding:      '4px 12px',
+              borderRadius: '20px',
+              animation:    'fadeIn 0.3s ease',
+            }}>
+              thinking...
+            </div>
+          </div>
+        )}
+        
         {/* Scroll anchor */}
         <div ref={bottomRef} />
       </div>

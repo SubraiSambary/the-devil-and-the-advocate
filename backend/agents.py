@@ -56,7 +56,7 @@ class LLMClient:
                     messages=full_messages,
                     options={
                         "temperature": 0.9,
-                        "num_predict": 150,    # reduced for speed
+                        "num_predict": 300,    # reduced for speed
                         "num_ctx":     2048,   # smaller context = faster
                     },
                 )
@@ -112,16 +112,16 @@ class DebateSession:
 
     async def run(self):
         # --- Dynamic opening lines ---
-        devil_open = await self.llm.quick_chat(
+        devil_open = self._clean(await self.llm.quick_chat(
             get_opening_prompt_devil(self.topic)
-        )
+        ))
         yield self._make_event("opening", "devil", devil_open)
         self._save(devil_open, "devil")
         await asyncio.sleep(0.5)
 
-        advocate_open = await self.llm.quick_chat(
+        advocate_open = self._clean(await self.llm.quick_chat(
             get_opening_prompt_advocate(self.topic, devil_open)
-        )
+        ))
         yield self._make_event("opening", "advocate", advocate_open)
         self._save(advocate_open, "advocate")
         await asyncio.sleep(0.5)
@@ -178,7 +178,18 @@ class DebateSession:
             if self._is_struggling("advocate"):
                 system += "\n\nYou are losing ground. Dig deeper! Make your strongest point yet."
 
-        reply = await self.llm.chat(system, messages)
+        reply = self._clean(await self.llm.chat(system, messages))
+
+        # Retry once if reply is empty or too short
+        if not reply or len(reply.strip()) < 10:
+            print(f"{agent} returned empty, retrying...")
+            reply = self._clean(await self.llm.chat(system, messages))
+
+        # If still empty after retry, skip saving and return empty
+        # ChatBubble will filter it out
+        if not reply or len(reply.strip()) < 10:
+            return ""
+
         self._save(reply, agent)
 
         word_count = len(reply.split())
@@ -196,22 +207,30 @@ class DebateSession:
             "role":    "user",
             "content": "React in max 6 words. Be dry and observational. No sign-off."
         })
-        return await self.llm.chat(self.judge_prompt, messages)
+        reply = await self.llm.chat(self.judge_prompt, messages)
+        return self._clean(reply)
 
 
     async def _get_verdict(self) -> str:
+        """Gets the Judge's final verdict using a dedicated high-token call."""
         messages = self._build_history_for("judge")
         messages.append({
             "role":    "user",
             "content": (
-                "Debate is over. Give your final verdict in 80-100 words. "
-                "Who won? Score both sides out of 10 on arguments, evidence, comebacks. "
-                "Roast the loser. Praise the winner. "
-                "End with: Court adjourned. ⚖️  No name sign-off."
+                "The debate is over. Give your honest verdict as a friend who just watched the whole thing. "
+                "Around 80-100 words, casual conversational tone — not formal. "
+                "Who won and why in plain language? "
+                "Give each person a score out of 10 for arguments, evidence, and how they handled pressure. "
+                "Use **double asterisks** around the winner's name and scores like **8/10**. "
+                "One playful jab at the loser. One genuine compliment to the winner. "
+                "End with: Court adjourned. ⚖️"
             )
         })
-        return await self.llm.chat(self.judge_prompt, messages)
-
+        reply = await self.llm.chat(self.judge_prompt, messages)
+        reply = self._clean(reply)
+        if not reply or len(reply) < 10:
+            return "Alright, I've heard enough. Both of you had your moments but honestly **The Advocate** edged it on evidence. Devil, you were all heat and no light today. Court adjourned. ⚖️"
+        return reply
 
     def _build_history_for(self, agent: str) -> list:
         messages = []
@@ -263,6 +282,17 @@ class DebateSession:
         if a > d:   return "advocate"
         return "draw"
 
+
+    def _clean(self, text: str) -> str:
+        """Strips artifacts the LLM adds."""
+        import re
+        # Remove role prefixes: [DEVIL]:  [ADVOCATE]:  *DEVIL:*  *ADVOCATE:*
+        text = re.sub(r'\*?\[?(DEVIL|ADVOCATE|JUDGE)\]?\*?\s*:\s*', '', text, flags=re.IGNORECASE)
+        # Remove wrapping quotes
+        text = text.strip('"').strip("'").strip('\u201c').strip('\u201d')
+        # Clean extra whitespace and newlines at start/end
+        text = text.strip()
+        return text
 
     def _make_event(self, type: str, agent: str, text: str,
                     round_num: int = 0, winner: str = "") -> dict:
