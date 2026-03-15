@@ -1,58 +1,69 @@
 // =====================================================
 // useDebate.js — WebSocket connection hook
 // =====================================================
-// A React "hook" is a function that manages state and
-// side effects for a component. Custom hooks start
-// with "use" by convention.
-// =====================================================
 
 import { useState, useRef, useCallback } from 'react'
 
 const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:8000/debate'
 
 export default function useDebate() {
-  const [messages,  setMessages]  = useState([])   // all debate messages
-  const [typing,    setTyping]    = useState(null)  // who is typing right now
-  const [status,    setStatus]    = useState('idle') // idle | connecting | debating | done | error
-  const [winner,    setWinner]    = useState(null)  // 'devil' | 'advocate' | 'draw'
-  const wsRef = useRef(null)                         // holds the WebSocket object
+  const [messages,  setMessages]  = useState([])
+  const [typing,    setTyping]    = useState(null)
+  const [status,    setStatus]    = useState('idle')
+  const [winner,    setWinner]    = useState(null)
+  const wsRef        = useRef(null)
+  const typingTimer  = useRef(null)   // tracks the typing indicator timer
 
-  // Determine who speaks next (for typing indicator)
-  const TURN_ORDER = ['devil', 'advocate', 'judge']
+  // Helper — show typing indicator for a given agent
+  // then auto-clear after `duration` milliseconds
+  const showTyping = (agent, duration = 2500) => {
+    // Cancel any existing timer first
+    if (typingTimer.current) {
+      clearTimeout(typingTimer.current)
+    }
+    setTyping(agent)
+    typingTimer.current = setTimeout(() => {
+      setTyping(null)
+    }, duration)
+  }
+
+  const clearTyping = () => {
+    if (typingTimer.current) {
+      clearTimeout(typingTimer.current)
+      typingTimer.current = null
+    }
+    setTyping(null)
+  }
 
   const startDebate = useCallback((topic) => {
-    // Reset everything for a fresh debate
     setMessages([])
-    setTyping(null)
+    clearTyping()
     setWinner(null)
     setStatus('connecting')
 
-    // Create WebSocket connection
     const ws = new WebSocket(WS_URL)
     wsRef.current = ws
 
     ws.onopen = () => {
       setStatus('debating')
-      // Send the topic to the backend
       ws.send(JSON.stringify({ topic }))
+      // Show Devil typing first — they always open
+      showTyping('devil', 3000)
     }
 
     ws.onmessage = (event) => {
       const data = JSON.parse(event.data)
 
-      if (data.type === 'status') {
-        // Just a status update — don't add to chat
-        return
-      }
+      if (data.type === 'status') return
 
       if (data.type === 'done') {
-        setTyping(null)
+        clearTyping()
         setStatus('done')
         return
       }
 
       if (data.type === 'error') {
-        setTyping(null)
+        clearTyping()
         setStatus('error')
         setMessages(prev => [...prev, data])
         return
@@ -62,22 +73,29 @@ export default function useDebate() {
         setWinner(data.winner)
       }
 
-      // Show typing indicator briefly before the message appears
-      if (data.type === 'turn' || data.type === 'opening') {
-        // Figure out who speaks next after this
+      // When a real message arrives, clear typing indicator
+      // then immediately show the NEXT agent typing
+      if (data.type === 'opening' || data.type === 'turn') {
+        clearTyping()
+
+        // Show the other agent typing while we wait for their reply
         const nextAgent = data.agent === 'devil' ? 'advocate' : 'devil'
-        setTimeout(() => setTyping(nextAgent), 500)
-        setTimeout(() => setTyping(null), 2000)
+        // Small delay before showing next typing indicator
+        setTimeout(() => showTyping(nextAgent, 4000), 400)
       }
 
       if (data.type === 'judge') {
-        setTimeout(() => setTyping(null), 500)
+        clearTyping()
+      }
+
+      if (data.type === 'verdict') {
+        clearTyping()
       }
 
       // Play audio if available
       if (data.audioUrl) {
         const audio = new Audio(data.audioUrl)
-        audio.play().catch(() => {})  // ignore autoplay errors
+        audio.play().catch(() => {})
       }
 
       // Add message to chat
@@ -86,10 +104,11 @@ export default function useDebate() {
 
     ws.onerror = () => {
       setStatus('error')
-      setTyping(null)
+      clearTyping()
     }
 
     ws.onclose = () => {
+      clearTyping()
       if (status !== 'done') setStatus('idle')
     }
   }, [])
@@ -99,8 +118,8 @@ export default function useDebate() {
       wsRef.current.close()
       wsRef.current = null
     }
+    clearTyping()
     setStatus('idle')
-    setTyping(null)
   }, [])
 
   return { messages, typing, status, winner, startDebate, stopDebate }
