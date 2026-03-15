@@ -85,6 +85,18 @@ async def health():
     """Used by Render.com to check if the server is alive."""
     return {"status": "healthy"}
 
+@app.get("/audio-test")
+async def audio_test():
+    """Lists all generated audio files."""
+    audio_dir = Path(__file__).parent / "audio"
+    if not audio_dir.exists():
+        return {"error": "audio folder does not exist"}
+    files = list(audio_dir.glob("*.mp3"))
+    return {
+        "folder": str(audio_dir),
+        "count": len(files),
+        "files": [f.name for f in files[-5:]]  # last 5 files
+    }
 
 # =============================================================
 # WebSocket endpoint — the heart of the app
