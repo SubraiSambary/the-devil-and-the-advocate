@@ -1,5 +1,5 @@
 # =============================================================
-# agents.py — The three debate agents
+# agents.py — Debate agents with dynamic ending
 # =============================================================
 
 import os
@@ -7,20 +7,21 @@ import asyncio
 from datetime import datetime
 from dotenv import load_dotenv
 from prompts import (
-    get_devil_prompt,
     get_advocate_prompt,
+    get_devil_prompt,
     get_judge_prompt,
-    get_opening_prompt_devil,
+    get_judge_end_check,
     get_opening_prompt_advocate,
+    get_opening_prompt_devil,
 )
 
 load_dotenv()
 
 MODE         = os.getenv("MODE", "local")
 OLLAMA_URL   = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.1:8b")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:3b")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
-MAX_ROUNDS   = int(os.getenv("MAX_DEBATE_ROUNDS", "5"))
+MAX_ROUNDS   = int(os.getenv("MAX_DEBATE_ROUNDS", "8"))   # max safety limit
 MIN_WORDS    = int(os.getenv("MIN_WORDS_PER_TURN", "30"))
 MAX_WORDS    = int(os.getenv("MAX_WORDS_PER_TURN", "80"))
 
@@ -37,7 +38,8 @@ class LLMClient:
             self.client = ollama
             self.model  = OLLAMA_MODEL
 
-    async def chat(self, system_prompt: str, messages: list) -> str:
+    async def chat(self, system_prompt: str, messages: list,
+                   max_tokens: int = 150) -> str:
         full_messages = [{"role": "system", "content": system_prompt}] + messages
         try:
             if self.mode == "cloud":
@@ -45,7 +47,7 @@ class LLMClient:
                     self.client.chat.completions.create,
                     model=self.model,
                     messages=full_messages,
-                    max_tokens=150,        # reduced for speed
+                    max_tokens=max_tokens,
                     temperature=0.9,
                 )
                 return response.choices[0].message.content.strip()
@@ -56,24 +58,24 @@ class LLMClient:
                     messages=full_messages,
                     options={
                         "temperature": 0.9,
-                        "num_predict": 300,    # reduced for speed
-                        "num_ctx":     2048,   # smaller context = faster
+                        "num_predict": max_tokens,
+                        "num_ctx":     2048,
                     },
                 )
                 return response["message"]["content"].strip()
         except Exception as e:
             print(f"LLM error: {e}")
-            return "..."
+            return ""
 
-    async def quick_chat(self, prompt: str) -> str:
-        """Single-turn call — no history. Used for opening lines."""
+    async def quick_chat(self, prompt: str, max_tokens: int = 80) -> str:
+        """Single turn — no history."""
         try:
             if self.mode == "cloud":
                 response = await asyncio.to_thread(
                     self.client.chat.completions.create,
                     model=self.model,
                     messages=[{"role": "user", "content": prompt}],
-                    max_tokens=80,
+                    max_tokens=max_tokens,
                     temperature=1.0,
                 )
                 return response.choices[0].message.content.strip()
@@ -84,14 +86,14 @@ class LLMClient:
                     messages=[{"role": "user", "content": prompt}],
                     options={
                         "temperature": 1.0,
-                        "num_predict": 80,
+                        "num_predict": max_tokens,
                         "num_ctx":     512,
                     },
                 )
                 return response["message"]["content"].strip()
         except Exception as e:
             print(f"LLM error: {e}")
-            return "..."
+            return ""
 
 
 class DebateSession:
@@ -102,148 +104,212 @@ class DebateSession:
         self.round      = 0
         self.max_rounds = MAX_ROUNDS
 
-        self.devil_prompt    = get_devil_prompt(topic, MIN_WORDS, MAX_WORDS)
         self.advocate_prompt = get_advocate_prompt(topic, MIN_WORDS, MAX_WORDS)
+        self.devil_prompt    = get_devil_prompt(topic, MIN_WORDS, MAX_WORDS)
         self.judge_prompt    = get_judge_prompt(topic)
+        self.end_check_prompt = get_judge_end_check(topic)
 
-        self.devil_word_counts    = []
         self.advocate_word_counts = []
+        self.devil_word_counts    = []
 
 
     async def run(self):
-        # --- Dynamic opening lines ---
-        devil_open = self._clean(await self.llm.quick_chat(
-            get_opening_prompt_devil(self.topic)
-        ))
-        yield self._make_event("opening", "devil", devil_open)
-        self._save(devil_open, "devil")
-        await asyncio.sleep(0.5)
-
+        # --- Opening lines ---
+        # Advocate goes first — defends the statement
         advocate_open = self._clean(await self.llm.quick_chat(
-            get_opening_prompt_advocate(self.topic, devil_open)
+            get_opening_prompt_advocate(self.topic)
         ))
         yield self._make_event("opening", "advocate", advocate_open)
         self._save(advocate_open, "advocate")
         await asyncio.sleep(0.5)
 
-        # --- Debate rounds ---
+        # Devil fires back — attacks the statement
+        devil_open = self._clean(await self.llm.quick_chat(
+            get_opening_prompt_devil(self.topic, advocate_open)
+        ))
+        yield self._make_event("opening", "devil", devil_open)
+        self._save(devil_open, "devil")
+        await asyncio.sleep(0.5)
+
+        # --- Debate rounds — run until Judge says END or max rounds hit ---
         for round_num in range(1, self.max_rounds + 1):
             self.round = round_num
 
-            first, second = ("devil", "advocate") if round_num % 2 != 0 else ("advocate", "devil")
-
-            # First speaker
-            first_text = await self._get_reply(first)
-            yield self._make_event("turn", first, first_text, round_num)
-            await asyncio.sleep(0.3)
-
-            # Quick emoji reaction
-            reaction = self._get_reaction(second, first_text)
-            if reaction:
-                yield self._make_event("reaction", second, reaction)
-                await asyncio.sleep(0.2)
-
-            # Second speaker
-            second_text = await self._get_reply(second)
-            yield self._make_event("turn", second, second_text, round_num)
-            await asyncio.sleep(0.3)
-
-            reaction2 = self._get_reaction(first, second_text)
-            if reaction2:
-                yield self._make_event("reaction", first, reaction2)
-                await asyncio.sleep(0.2)
-
-            # Judge every 2nd round
-            if round_num % 2 == 0:
-                judge_line = await self._get_judge_comment()
-                yield self._make_event("judge", "judge", judge_line, round_num)
+            # Advocate argues (defends TRUE)
+            advocate_text = await self._get_reply("advocate")
+            if advocate_text:
+                yield self._make_event("turn", "advocate", advocate_text, round_num)
                 await asyncio.sleep(0.3)
 
-        # --- Final verdict ---
-        verdict = await self._get_verdict()
-        winner  = self._find_winner(verdict)
-        yield self._make_event("verdict", "judge", verdict, winner=winner)
+                # Devil reacts
+                reaction = self._get_reaction("devil", advocate_text)
+                if reaction:
+                    yield self._make_event("reaction", "devil", reaction)
+                    await asyncio.sleep(0.2)
+
+            # Devil counter-argues (attacks as FALSE)
+            devil_text = await self._get_reply("devil")
+            if devil_text:
+                yield self._make_event("turn", "devil", devil_text, round_num)
+                await asyncio.sleep(0.3)
+
+                # Advocate reacts
+                reaction2 = self._get_reaction("advocate", devil_text)
+                if reaction2:
+                    yield self._make_event("reaction", "advocate", reaction2)
+                    await asyncio.sleep(0.2)
+
+            # Judge chimes in every 2nd round
+            if round_num % 2 == 0:
+                judge_line = await self._get_judge_comment()
+                if judge_line:
+                    yield self._make_event("judge", "judge", judge_line, round_num)
+                    await asyncio.sleep(0.3)
+
+            # --- Ask Judge if debate should end ---
+            # Check after round 2 minimum so debate has some substance
+            if round_num >= 2:
+                end_decision = await self._should_end()
+                print(f"Round {round_num} end check: {end_decision}")
+
+                if end_decision.startswith("END:"):
+                    winner = end_decision.split(":")[1].strip().lower()
+
+                    # Judge announces the end
+                    ending_line = await self._get_ending_call(winner)
+                    yield self._make_event("judge", "judge", ending_line, round_num)
+                    await asyncio.sleep(0.5)
+
+                    # Final verdict
+                    verdict = await self._get_verdict(winner)
+                    yield self._make_event("verdict", "judge", verdict, winner=winner)
+                    yield {"type": "done"}
+                    return
+
+        # --- Safety fallback if max rounds hit without Judge ending it ---
+        verdict = await self._get_verdict("draw")
+        yield self._make_event("verdict", "judge", verdict, winner="draw")
         yield {"type": "done"}
 
 
     async def _get_reply(self, agent: str) -> str:
         messages = self._build_history_for(agent)
 
-        if agent == "devil":
-            system = self.devil_prompt
-            if self._is_struggling("devil"):
-                system += "\n\nYou are losing ground. Get more aggressive. Find a brand new angle NOW."
-        else:
+        if agent == "advocate":
             system = self.advocate_prompt
             if self._is_struggling("advocate"):
-                system += "\n\nYou are losing ground. Dig deeper! Make your strongest point yet."
+                system += "\n\nYou are running out of arguments to defend this statement. Dig deeper — find a completely new angle or piece of evidence. Do NOT repeat yourself."
+        else:
+            system = self.devil_prompt
+            if self._is_struggling("devil"):
+                system += "\n\nYou are running out of ways to attack this statement. Find a new angle — edge cases, exceptions, historical contradictions. Do NOT repeat yourself."
 
         reply = self._clean(await self.llm.chat(system, messages))
 
-        # Retry once if reply is empty or too short
         if not reply or len(reply.strip()) < 10:
             print(f"{agent} returned empty, retrying...")
             reply = self._clean(await self.llm.chat(system, messages))
 
-        # If still empty after retry, skip saving and return empty
-        # ChatBubble will filter it out
         if not reply or len(reply.strip()) < 10:
             return ""
 
         self._save(reply, agent)
-
         word_count = len(reply.split())
-        if agent == "devil":
-            self.devil_word_counts.append(word_count)
-        else:
+        if agent == "advocate":
             self.advocate_word_counts.append(word_count)
+        else:
+            self.devil_word_counts.append(word_count)
 
         return reply
 
 
     async def _get_judge_comment(self) -> str:
+        """Short mid-debate one-liner from the Judge."""
         messages = self._build_history_for("judge")
         messages.append({
             "role":    "user",
-            "content": "React in max 6 words. Be dry and observational. No sign-off."
+            "content": "React to the last exchange in max 8 words. Casual and dry. No sign-off."
         })
-        reply = await self.llm.chat(self.judge_prompt, messages)
-        return self._clean(reply)
+        reply = self._clean(await self.llm.chat(self.judge_prompt, messages, max_tokens=30))
+        return reply
 
 
-    async def _get_verdict(self) -> str:
-        """Gets the Judge's final verdict."""
+    async def _should_end(self) -> str:
+        """
+        Asks the Judge privately if the debate should end.
+        Returns: CONTINUE, END:advocate, END:devil, or END:draw
+        """
+        # Build a summary of recent exchanges for the Judge
+        recent = self.history[-6:] if len(self.history) >= 6 else self.history
+        summary = "\n".join([f"{e['agent'].upper()}: {e['text']}" for e in recent])
+
+        prompt = (
+            f"{self.end_check_prompt}\n\n"
+            f"Recent exchanges:\n{summary}\n\n"
+            f"Total rounds completed: {self.round}\n"
+            f"Respond with ONLY: CONTINUE, END:advocate, END:devil, or END:draw"
+        )
+
+        response = await self.llm.quick_chat(prompt, max_tokens=10)
+        response = response.strip().upper()
+
+        # Validate response
+        if response.startswith("END:"):
+            return response.lower()
+        return "CONTINUE"
+
+
+    async def _get_ending_call(self, winner: str) -> str:
+        """Judge announces why the debate is ending."""
+        if winner == "draw":
+            prompts = [
+                "okay both of you need to stop, you're going in circles 😂",
+                "alright that's enough, neither of you is budging",
+                "calling it here — you've both said everything there is to say",
+            ]
+            import random
+            return random.choice(prompts)
+
+        loser = "devil" if winner == "advocate" else "advocate"
+        prompt = (
+            f"You are The Judge watching a debate about: {self.topic}\n"
+            f"{winner.capitalize()} won. {loser.capitalize()} ran out of arguments.\n"
+            f"Write ONE casual sentence (max 12 words) announcing {loser} has given up. "
+            f"Sound like a friend calling it, not a referee. No sign-off."
+        )
+        reply = self._clean(await self.llm.quick_chat(prompt, max_tokens=40))
+        return reply if reply else f"that's it — {loser} has nothing left 😂"
+
+
+    async def _get_verdict(self, winner: str) -> str:
+        """Final verdict from the Judge."""
         messages = self._build_history_for("judge")
         messages.append({
             "role":    "user",
             "content": (
-                "The debate is over. Give your verdict as a friend.\n\n"
-                "Follow this EXACT template, filling in the blanks:\n\n"
-                "Alright, I've made up my mind. [DEVIL or ADVOCATE] won this one. "
-                "The moment that decided it was when [describe the moment].\n\n"
-                "Scores — Devil: [X]/10 for arguments, [X]/10 for evidence, [X]/10 for composure. "
-                "Advocate: [X]/10 for arguments, [X]/10 for evidence, [X]/10 for composure.\n\n"
-                "[Loser's name], [one sentence friendly roast]. "
-                "[Winner's name], [one sentence genuine compliment]. "
-                "Court adjourned. ⚖️\n\n"
-                "RULES: Always write the words Devil and Advocate by name. Never use pronouns alone."
+                f"The debate about '{self.topic}' is over. "
+                f"{'It was a draw — both sides were equally stuck.' if winner == 'draw' else f'{winner.capitalize()} won.'}\n\n"
+                "Give your verdict as a friend — casual, funny, fair. Around 80 words.\n"
+                "Who won and why (use the names Devil and Advocate)?\n"
+                "Score Devil and Advocate out of 10 each.\n"
+                "One playful jab at the loser by name.\n"
+                "One genuine compliment to the winner by name.\n"
+                "End with: Court adjourned. ⚖️\n"
+                "Never use pronouns alone — always say Devil or Advocate by name."
             )
         })
-        reply = await self.llm.chat(self.judge_prompt, messages)
-        print(f"RAW VERDICT: {reply}")   # debug — shows in Render logs
-        reply = self._clean(reply)
-        print(f"CLEAN VERDICT: {reply}") # debug
-
-        # Post-process: if names are still missing, inject them
-        if "devil" not in reply.lower() and "advocate" not in reply.lower():
-            return (
-                "Alright, I've heard enough. Both made solid points but Advocate edged it "
-                "on evidence and composure. Devil: 6/10, Advocate: 8/10. "
-                "Devil, you were all fire and no follow-through. "
-                "Advocate, you kept your cool when it mattered most. "
-                "Court adjourned. ⚖️"
-            )
+        reply = self._clean(await self.llm.chat(
+            self.judge_prompt, messages, max_tokens=250
+        ))
+        if not reply or len(reply) < 20:
+            if winner == "advocate":
+                return "Advocate made the stronger case — defended the statement with real facts and didn't crack under pressure. Devil: 6/10, Advocate: 8/10. Devil, you poked holes but never found the knockout blow. Advocate, solid work start to finish. Court adjourned. ⚖️"
+            elif winner == "devil":
+                return "Devil dismantled this one piece by piece. Advocate tried hard but couldn't patch the holes fast enough. Devil: 8/10, Advocate: 6/10. Advocate, the passion was there but the evidence wasn't. Devil, ruthlessly efficient as always. Court adjourned. ⚖️"
+            else:
+                return "Honestly? A draw. Both of you made decent points but neither landed the knockout. Devil: 7/10, Advocate: 7/10. You're both too stubborn for your own good. Well argued though. Court adjourned. ⚖️"
         return reply
+
 
     def _build_history_for(self, agent: str) -> list:
         messages = []
@@ -257,11 +323,12 @@ class DebateSession:
 
 
     def _save(self, text: str, agent: str):
-        self.history.append({"text": text, "agent": agent})
+        if text:
+            self.history.append({"text": text, "agent": agent})
 
 
     def _is_struggling(self, agent: str) -> bool:
-        counts = self.devil_word_counts if agent == "devil" else self.advocate_word_counts
+        counts = self.advocate_word_counts if agent == "advocate" else self.devil_word_counts
         if len(counts) < 3:
             return False
         recent = counts[-3:]
@@ -271,42 +338,43 @@ class DebateSession:
     def _get_reaction(self, agent: str, other_text: str) -> str:
         text = other_text.lower()
         if agent == "devil":
-            if any(w in text for w in ["research", "study", "proven", "data", "science"]):
+            if any(w in text for w in ["research", "study", "proven", "data", "science", "fact"]):
                 return "😂 ok professor"
-            elif any(w in text for w in ["amazing", "incredible", "revolutionar", "wonderful"]):
+            elif any(w in text for w in ["amazing", "incredible", "revolutionar", "beautiful"]):
                 return "💀"
-            elif any(w in text for w in ["society", "people", "world", "everyone"]):
-                return "🙄"
+            elif any(w in text for w in ["true", "correct", "right", "obviously"]):
+                return "🙄 sure"
         else:
-            if any(w in text for w in ["disaster", "terrible", "failed", "worst", "broken"]):
+            if any(w in text for w in ["false", "wrong", "misleading", "actually not"]):
                 return "😭 here we go"
-            elif any(w in text for w in ["never works", "impossible", "always fails"]):
+            elif any(w in text for w in ["never", "impossible", "always fails", "disaster"]):
                 return "that's just not true!!"
-            elif any(w in text for w in ["actually", "technically", "statistic"]):
+            elif any(w in text for w in ["technically", "actually", "well"]):
                 return "👀"
         return ""
 
 
-    def _find_winner(self, verdict: str) -> str:
-        text = verdict.lower()
-        d = text.count("devil wins") + text.count("winner: devil") + text.count("devil takes")
-        a = text.count("advocate wins") + text.count("winner: advocate") + text.count("advocate takes")
-        if d > a:   return "devil"
-        if a > d:   return "advocate"
-        return "draw"
-
-
     def _clean(self, text: str) -> str:
-        """Strips artifacts the LLM adds."""
+        """Strips LLM artifacts."""
         import re
-        # Remove role prefixes and action labels like [casually]: [smirking]: etc.
-        text = re.sub(r'\*?\[?[\w\s]+\]?\*?\s*:\s*', '', text, count=1)
-        # But don't strip if it removed too much (safety check)
+        # Remove role/action labels like [DEVIL]: [casually]: *smirking*:
+        text = re.sub(r'(\*{1,2}|\[)[^\]*]{1,30}(\*{1,2}|\])\s*:?\s*', '', text, count=2)
+        # Remove simple PREFIX: patterns at start
+        text = re.sub(r'^[A-Z][A-Za-z\s]{0,20}:\s*', '', text)
         # Remove wrapping quotes
         text = text.strip('"').strip("'").strip('\u201c').strip('\u201d')
-        # Clean extra whitespace
         text = text.strip()
         return text
+
+
+    def _find_winner(self, verdict: str) -> str:
+        text = verdict.lower()
+        d = text.count("devil wins") + text.count("devil took") + text.count("devil edged")
+        a = text.count("advocate wins") + text.count("advocate took") + text.count("advocate edged")
+        if d > a: return "devil"
+        if a > d: return "advocate"
+        return "draw"
+
 
     def _make_event(self, type: str, agent: str, text: str,
                     round_num: int = 0, winner: str = "") -> dict:
