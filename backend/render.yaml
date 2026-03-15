@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: the-devil-and-the-advocate-backend
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py
+    envVars:
+      - key: MODE
+        value: cloud
+      - key: GROQ_API_KEY
+        sync: false
+      - key: MAX_DEBATE_ROUNDS
+        value: 5
+      - key: MIN_WORDS_PER_TURN
+        value: 30
+      - key: MAX_WORDS_PER_TURN
+        value: 80
