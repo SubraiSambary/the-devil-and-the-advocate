@@ -230,7 +230,9 @@ class DebateSession:
             )
         })
         reply = await self.llm.chat(self.judge_prompt, messages)
+        print(f"RAW VERDICT: {reply}")   # debug — shows in Render logs
         reply = self._clean(reply)
+        print(f"CLEAN VERDICT: {reply}") # debug
 
         # Post-process: if names are still missing, inject them
         if "devil" not in reply.lower() and "advocate" not in reply.lower():
@@ -297,8 +299,9 @@ class DebateSession:
     def _clean(self, text: str) -> str:
         """Strips artifacts the LLM adds."""
         import re
-        # Remove role prefixes: [DEVIL]: [ADVOCATE]: *DEVIL:* [negative spin] etc.
-        text = re.sub(r'\*?\[?(DEVIL|ADVOCATE|JUDGE|negative spin|pro|con|positive|negative)\]?\*?\s*:?\s*', '', text, flags=re.IGNORECASE)
+        # Remove role prefixes and action labels like [casually]: [smirking]: etc.
+        text = re.sub(r'\*?\[?[\w\s]+\]?\*?\s*:\s*', '', text, count=1)
+        # But don't strip if it removed too much (safety check)
         # Remove wrapping quotes
         text = text.strip('"').strip("'").strip('\u201c').strip('\u201d')
         # Clean extra whitespace
