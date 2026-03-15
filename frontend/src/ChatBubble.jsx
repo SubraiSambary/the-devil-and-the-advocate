@@ -57,31 +57,19 @@ export default function ChatBubble({ event, isNew }) {
 
   // ── Emoji reaction ──
   if (event.type === 'reaction') {
+    // Only render if it has actual content
+    if (!event.text || event.text.trim().length < 1) return null
     return (
       <div style={{
         display:        'flex',
         flexDirection:  isLeft ? 'row' : 'row-reverse',
         alignItems:     'center',
-        gap:            '8px',
-        padding:        '1px 16px',
+        gap:            '6px',
+        padding:        '0px 20px 0px 58px',
       }}>
-        <div style={{
-          width:          '24px',
-          height:         '24px',
-          borderRadius:   '50%',
-          background:     agent.bg,
-          border:         `1px solid ${agent.color}`,
-          display:        'flex',
-          alignItems:     'center',
-          justifyContent: 'center',
-          fontSize:       '12px',
-          flexShrink:     0,
-        }}>
-          {agent.emoji}
-        </div>
         <span style={{
-          fontSize:   '13px',
-          color:      '#888',
+          fontSize:   '12px',
+          color:      '#666',
           fontStyle:  'italic',
           animation:  isNew ? 'popIn 0.2s ease' : 'none',
         }}>
