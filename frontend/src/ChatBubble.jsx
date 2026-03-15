@@ -60,13 +60,30 @@ export default function ChatBubble({ event, isNew }) {
     return (
       <div style={{
         display:        'flex',
-        justifyContent: isLeft ? 'flex-start' : 'flex-end',
-        padding:        '1px 60px',
+        flexDirection:  isLeft ? 'row' : 'row-reverse',
+        alignItems:     'center',
+        gap:            '8px',
+        padding:        '1px 16px',
       }}>
+        <div style={{
+          width:          '24px',
+          height:         '24px',
+          borderRadius:   '50%',
+          background:     agent.bg,
+          border:         `1px solid ${agent.color}`,
+          display:        'flex',
+          alignItems:     'center',
+          justifyContent: 'center',
+          fontSize:       '12px',
+          flexShrink:     0,
+        }}>
+          {agent.emoji}
+        </div>
         <span style={{
-          fontSize:  '18px',
-          opacity:   0.8,
-          animation: isNew ? 'popIn 0.2s ease' : 'none',
+          fontSize:   '13px',
+          color:      '#888',
+          fontStyle:  'italic',
+          animation:  isNew ? 'popIn 0.2s ease' : 'none',
         }}>
           {event.text}
         </span>

@@ -1,30 +1,23 @@
-// =====================================================
-// useDebate.js — WebSocket connection hook
-// =====================================================
-
 import { useState, useRef, useCallback } from 'react'
 
 const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:8000/debate'
+const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000'
 
 export default function useDebate() {
   const [messages,  setMessages]  = useState([])
   const [typing,    setTyping]    = useState(null)
   const [status,    setStatus]    = useState('idle')
   const [winner,    setWinner]    = useState(null)
-  const wsRef        = useRef(null)
-  const typingTimer  = useRef(null)   // tracks the typing indicator timer
+  const wsRef         = useRef(null)
+  const typingTimer   = useRef(null)
+  const currentAudio  = useRef(null)
+  const messageQueue  = useRef([])      // holds incoming events
+  const isProcessing  = useRef(false)   // is a message currently being shown
 
-  // Helper — show typing indicator for a given agent
-  // then auto-clear after `duration` milliseconds
   const showTyping = (agent, duration = 2500) => {
-    // Cancel any existing timer first
-    if (typingTimer.current) {
-      clearTimeout(typingTimer.current)
-    }
+    if (typingTimer.current) clearTimeout(typingTimer.current)
     setTyping(agent)
-    typingTimer.current = setTimeout(() => {
-      setTyping(null)
-    }, duration)
+    typingTimer.current = setTimeout(() => setTyping(null), duration)
   }
 
   const clearTyping = () => {
@@ -35,7 +28,97 @@ export default function useDebate() {
     setTyping(null)
   }
 
+  // Process one message at a time from the queue
+  const processNext = useCallback(() => {
+    if (messageQueue.current.length === 0) {
+      isProcessing.current = false
+      return
+    }
+
+    isProcessing.current = true
+    const data = messageQueue.current.shift()
+
+    // Handle control messages immediately
+    if (data.type === 'done') {
+      clearTyping()
+      setStatus('done')
+      isProcessing.current = false
+      return
+    }
+
+    if (data.type === 'error') {
+      clearTyping()
+      setStatus('error')
+      setMessages(prev => [...prev, data])
+      isProcessing.current = false
+      return
+    }
+
+    if (data.type === 'verdict' && data.winner) {
+      setWinner(data.winner)
+    }
+
+    // Update typing indicator
+    if (data.type === 'opening' || data.type === 'turn') {
+      clearTyping()
+      const nextAgent = data.agent === 'devil' ? 'advocate' : 'devil'
+      setTimeout(() => showTyping(nextAgent, 4000), 400)
+    }
+
+    if (data.type === 'judge' || data.type === 'verdict') {
+      clearTyping()
+    }
+
+    // Add message to chat immediately
+    setMessages(prev => {
+      const isDuplicate = prev.some(m => m.text === data.text && m.agent === data.agent)
+      if (isDuplicate) return prev
+      return [...prev, { ...data, isNew: true }]
+    })
+
+    // If there's audio — play it fully before processing next message
+    if (data.audioUrl) {
+      if (currentAudio.current) {
+        currentAudio.current.pause()
+        currentAudio.current = null
+      }
+      const audio = new Audio(`${API_BASE}${data.audioUrl}`)
+      currentAudio.current = audio
+
+      audio.onended = () => {
+        currentAudio.current = null
+        // Small natural pause between messages
+        setTimeout(() => processNext(), 300)
+      }
+      audio.onerror = () => {
+        currentAudio.current = null
+        setTimeout(() => processNext(), 300)
+      }
+      audio.play().catch(() => {
+        // Autoplay blocked — move on after short delay
+        setTimeout(() => processNext(), 500)
+      })
+    } else {
+      // No audio — small pause then next message
+      setTimeout(() => processNext(), 200)
+    }
+  }, [])
+
+  const enqueue = useCallback((data) => {
+    messageQueue.current.push(data)
+    if (!isProcessing.current) {
+      processNext()
+    }
+  }, [processNext])
+
   const startDebate = useCallback((topic) => {
+    if (currentAudio.current) {
+      currentAudio.current.pause()
+      currentAudio.current = null
+    }
+    messageQueue.current = []
+    isProcessing.current = false
+
     setMessages([])
     clearTyping()
     setWinner(null)
@@ -47,59 +130,13 @@ export default function useDebate() {
     ws.onopen = () => {
       setStatus('debating')
       ws.send(JSON.stringify({ topic }))
-      // Show Devil typing first — they always open
       showTyping('devil', 3000)
     }
 
     ws.onmessage = (event) => {
       const data = JSON.parse(event.data)
-
       if (data.type === 'status') return
-
-      if (data.type === 'done') {
-        clearTyping()
-        setStatus('done')
-        return
-      }
-
-      if (data.type === 'error') {
-        clearTyping()
-        setStatus('error')
-        setMessages(prev => [...prev, data])
-        return
-      }
-
-      if (data.type === 'verdict' && data.winner) {
-        setWinner(data.winner)
-      }
-
-      // When a real message arrives, clear typing indicator
-      // then immediately show the NEXT agent typing
-      if (data.type === 'opening' || data.type === 'turn') {
-        clearTyping()
-
-        // Show the other agent typing while we wait for their reply
-        const nextAgent = data.agent === 'devil' ? 'advocate' : 'devil'
-        // Small delay before showing next typing indicator
-        setTimeout(() => showTyping(nextAgent, 4000), 400)
-      }
-
-      if (data.type === 'judge') {
-        clearTyping()
-      }
-
-      if (data.type === 'verdict') {
-        clearTyping()
-      }
-
-      // Play audio if available
-      if (data.audioUrl) {
-        const audio = new Audio(data.audioUrl)
-        audio.play().catch(() => {})
-      }
-
-      // Add message to chat
-      setMessages(prev => [...prev, { ...data, isNew: true }])
+      enqueue(data)
     }
 
     ws.onerror = () => {
@@ -109,15 +146,20 @@ export default function useDebate() {
 
     ws.onclose = () => {
       clearTyping()
-      if (status !== 'done') setStatus('idle')
     }
-  }, [])
+  }, [enqueue])
 
   const stopDebate = useCallback(() => {
     if (wsRef.current) {
       wsRef.current.close()
       wsRef.current = null
     }
+    if (currentAudio.current) {
+      currentAudio.current.pause()
+      currentAudio.current = null
+    }
+    messageQueue.current = []
+    isProcessing.current = false
     clearTyping()
     setStatus('idle')
   }, [])

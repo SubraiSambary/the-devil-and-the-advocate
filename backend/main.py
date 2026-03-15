@@ -170,7 +170,7 @@ async def debate_websocket(websocket: WebSocket):
         async for event in session.run():
 
             # Step 4: Generate voice audio for main messages
-            if event.get("type") in ("opening", "turn", "verdict"):
+            if event.get("type") in ("opening", "turn", "verdict", "judge"):
                 audio_url = await _make_audio(event)
                 if audio_url:
                     event["audioUrl"] = audio_url
@@ -202,28 +202,35 @@ async def debate_websocket(websocket: WebSocket):
 # =============================================================
 
 async def _make_audio(event: dict) -> str:
-    """
-    Generates a TTS audio file for a debate message.
-    Returns the URL the browser can use to play it.
-    Returns empty string if TTS fails.
-    """
+    """Generates TTS audio and returns the URL for the browser."""
 
-    # Map each agent to a distinct voice
     voices = {
-        "devil":    "en-US-GuyNeural",          # deep, gruff
-        "advocate": "en-US-JennyNeural",         # bright, upbeat
-        "judge":    "en-US-ChristopherNeural",   # calm, measured
+        "devil":    "en-US-GuyNeural",
+        "advocate": "en-US-JennyNeural",
+        "judge":    "en-US-ChristopherNeural",
     }
 
-    agent    = event.get("agent", "")
-    text     = event.get("text", "")
+    agent     = event.get("agent", "")
+    text      = event.get("text", "")
     round_num = event.get("round", 0)
+
+    if not text or len(text.strip()) < 3:
+        return ""
+
     voice    = voices.get(agent, "en-US-GuyNeural")
-    filename = f"audio/{agent}_r{round_num}_{abs(hash(text)) % 100000}.mp3"
+
+    # Use absolute path so it works regardless of where Python is run from
+    base_dir = Path(__file__).parent
+    audio_dir = base_dir / "audio"
+    audio_dir.mkdir(exist_ok=True)
+
+    filename     = f"{agent}_r{round_num}_{abs(hash(text)) % 100000}.mp3"
+    full_path    = audio_dir / filename
+    browser_url  = f"/audio/{filename}"
 
     try:
-        await generate_speech(text=text, voice=voice, output_path=filename)
-        return f"/{filename}"
+        await generate_speech(text=text, voice=voice, output_path=str(full_path))
+        return browser_url
     except Exception as e:
         print(f"TTS failed for {agent}: {e}")
         return ""

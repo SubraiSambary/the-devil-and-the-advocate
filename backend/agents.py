@@ -212,24 +212,35 @@ class DebateSession:
 
 
     async def _get_verdict(self) -> str:
-        """Gets the Judge's final verdict using a dedicated high-token call."""
+        """Gets the Judge's final verdict."""
         messages = self._build_history_for("judge")
         messages.append({
             "role":    "user",
             "content": (
-                "The debate is over. Give your honest verdict as a friend who just watched the whole thing. "
-                "Around 80-100 words, casual conversational tone — not formal. "
-                "Who won and why in plain language? "
-                "Give each person a score out of 10 for arguments, evidence, and how they handled pressure. "
-                "Use **double asterisks** around the winner's name and scores like **8/10**. "
-                "One playful jab at the loser. One genuine compliment to the winner. "
-                "End with: Court adjourned. ⚖️"
+                "The debate is over. Give your verdict as a friend.\n\n"
+                "Follow this EXACT template, filling in the blanks:\n\n"
+                "Alright, I've made up my mind. [DEVIL or ADVOCATE] won this one. "
+                "The moment that decided it was when [describe the moment].\n\n"
+                "Scores — Devil: [X]/10 for arguments, [X]/10 for evidence, [X]/10 for composure. "
+                "Advocate: [X]/10 for arguments, [X]/10 for evidence, [X]/10 for composure.\n\n"
+                "[Loser's name], [one sentence friendly roast]. "
+                "[Winner's name], [one sentence genuine compliment]. "
+                "Court adjourned. ⚖️\n\n"
+                "RULES: Always write the words Devil and Advocate by name. Never use pronouns alone."
             )
         })
         reply = await self.llm.chat(self.judge_prompt, messages)
         reply = self._clean(reply)
-        if not reply or len(reply) < 10:
-            return "Alright, I've heard enough. Both of you had your moments but honestly **The Advocate** edged it on evidence. Devil, you were all heat and no light today. Court adjourned. ⚖️"
+
+        # Post-process: if names are still missing, inject them
+        if "devil" not in reply.lower() and "advocate" not in reply.lower():
+            return (
+                "Alright, I've heard enough. Both made solid points but Advocate edged it "
+                "on evidence and composure. Devil: 6/10, Advocate: 8/10. "
+                "Devil, you were all fire and no follow-through. "
+                "Advocate, you kept your cool when it mattered most. "
+                "Court adjourned. ⚖️"
+            )
         return reply
 
     def _build_history_for(self, agent: str) -> list:
@@ -286,11 +297,11 @@ class DebateSession:
     def _clean(self, text: str) -> str:
         """Strips artifacts the LLM adds."""
         import re
-        # Remove role prefixes: [DEVIL]:  [ADVOCATE]:  *DEVIL:*  *ADVOCATE:*
-        text = re.sub(r'\*?\[?(DEVIL|ADVOCATE|JUDGE)\]?\*?\s*:\s*', '', text, flags=re.IGNORECASE)
+        # Remove role prefixes: [DEVIL]: [ADVOCATE]: *DEVIL:* [negative spin] etc.
+        text = re.sub(r'\*?\[?(DEVIL|ADVOCATE|JUDGE|negative spin|pro|con|positive|negative)\]?\*?\s*:?\s*', '', text, flags=re.IGNORECASE)
         # Remove wrapping quotes
         text = text.strip('"').strip("'").strip('\u201c').strip('\u201d')
-        # Clean extra whitespace and newlines at start/end
+        # Clean extra whitespace
         text = text.strip()
         return text
 
