@@ -74,20 +74,9 @@ app.mount("/audio", StaticFiles(directory="audio"), name="audio")
 # HTTP routes — regular request/response endpoints
 # =============================================================
 
-@app.get("/")
+@app.api_route("/", methods=["GET", "HEAD"])
 async def root():
-    """
-    Health check endpoint.
-    Visit http://localhost:8000 to confirm the server is running.
-
-    PYTHON LESSON: @app.get("/") is a "decorator"
-    --------------------------------------------------------------
-    A decorator starts with @ and sits above a function.
-    It wraps that function with extra behaviour.
-    @app.get("/") tells FastAPI: when someone visits GET /,
-    run the function below and return what it returns.
-    --------------------------------------------------------------
-    """
+    """Health check endpoint."""
     return {"status": "running", "app": "The Devil & The Advocate 😈😇"}
 
 
