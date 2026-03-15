@@ -167,8 +167,9 @@ class DebateSession:
                     await asyncio.sleep(0.3)
 
             # --- Ask Judge if debate should end ---
-            # Check after round 2 minimum so debate has some substance
-            if round_num >= 2:
+            # End check after round 2 — or round 1 if Devil is clearly struggling
+            devil_struggling = self._is_struggling("devil")
+            if round_num >= 2 or (round_num >= 1 and devil_struggling):
                 end_decision = await self._should_end()
                 print(f"Round {round_num} end check: {end_decision}")
 
@@ -236,26 +237,37 @@ class DebateSession:
 
     async def _should_end(self) -> str:
         """
-        Asks the Judge privately if the debate should end.
+        Asks the Judge if the debate should end.
         Returns: CONTINUE, END:advocate, END:devil, or END:draw
         """
-        # Build a summary of recent exchanges for the Judge
         recent = self.history[-6:] if len(self.history) >= 6 else self.history
         summary = "\n".join([f"{e['agent'].upper()}: {e['text']}" for e in recent])
 
         prompt = (
-            f"{self.end_check_prompt}\n\n"
+            f"You are judging a debate about: '{self.topic}'\n"
+            f"One side defends it as TRUE, the other attacks it as FALSE.\n\n"
             f"Recent exchanges:\n{summary}\n\n"
-            f"Total rounds completed: {self.round}\n"
-            f"Respond with ONLY: CONTINUE, END:advocate, END:devil, or END:draw"
+            f"Rounds completed: {self.round}\n\n"
+            f"Is one side clearly repeating themselves or out of new arguments?\n"
+            f"Reply with ONLY one of these four options, nothing else:\n"
+            f"CONTINUE\n"
+            f"END:advocate\n"
+            f"END:devil\n"
+            f"END:draw\n"
         )
 
-        response = await self.llm.quick_chat(prompt, max_tokens=10)
-        response = response.strip().upper()
+        response = await self.llm.quick_chat(prompt, max_tokens=15)
+        response = response.strip()
+        print(f"End check raw response: '{response}'")
 
-        # Validate response
-        if response.startswith("END:"):
-            return response.lower()
+        # Parse more loosely — look for keywords anywhere in response
+        response_lower = response.lower()
+        if "end:advocate" in response_lower or ("end" in response_lower and "advocate" in response_lower):
+            return "end:advocate"
+        if "end:devil" in response_lower or ("end" in response_lower and "devil" in response_lower):
+            return "end:devil"
+        if "end:draw" in response_lower or ("end" in response_lower and "draw" in response_lower):
+            return "end:draw"
         return "CONTINUE"
 
 
