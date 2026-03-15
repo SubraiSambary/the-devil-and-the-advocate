@@ -301,6 +301,9 @@ class DebateSession:
             "content": (
                 f"The debate about '{self.topic}' is over. "
                 f"{'It was a draw — both sides were equally stuck.' if winner == 'draw' else f'{winner.capitalize()} won.'}\n\n"
+                f"IMPORTANT CONTEXT: If '{self.topic}' is a well-established scientific or "
+                f"historical fact, Advocate should win or score higher because you cannot "
+                f"win an argument against established fact — no matter how clever Devil was.\n\n"
                 "Give your verdict as a friend — casual, funny, fair. Around 80 words.\n"
                 "Who won and why (use the names Devil and Advocate)?\n"
                 "Score Devil and Advocate out of 10 each.\n"
